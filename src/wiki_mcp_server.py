@@ -2187,14 +2187,140 @@ async def wikijs_create_asset_folder(name: str, slug: str, parent_folder_id: int
         logger.error(error_msg)
         return json.dumps({"error": error_msg})
 
+@mcp.tool()
+async def wikijs_upload_asset(file_path: str, folder_id: int = 0) -> str:
+    """
+    Upload a local file to Wiki.js assets.
+
+    Args:
+        file_path: Absolute path to the local file
+        folder_id: Target folder ID (0 = root). Use wikijs_list_asset_folders to find folder IDs.
+
+    Returns:
+        JSON string: {"id": int, "filename": str, "mime": str, "fileSize": int, "kind": str}
+        On folder-not-found: {"error": str, "available_folders": [...]}
+    """
+    try:
+        if not os.path.isfile(file_path):
+            return json.dumps({"error": f"File not found or is not a file: {file_path}"})
+
+        file_size = os.path.getsize(file_path)
+        if file_size > settings.WIKIJS_MAX_UPLOAD_BYTES:
+            max_mb = settings.WIKIJS_MAX_UPLOAD_BYTES / 1_048_576
+            actual_mb = file_size / 1_048_576
+            return json.dumps({
+                "error": f"File size {actual_mb:.1f}MB exceeds limit of {max_mb:.0f}MB",
+                "file_size_bytes": file_size,
+                "limit_bytes": settings.WIKIJS_MAX_UPLOAD_BYTES
+            })
+
+        await wikijs.authenticate()
+
+        if folder_id != 0:
+            folders_response = await wikijs.graphql_request(
+                """
+                query {
+                    assets {
+                        folders(parentFolderId: 0) {
+                            id
+                            name
+                            slug
+                        }
+                    }
+                }
+                """,
+                {}
+            )
+            folders = folders_response.get("data", {}).get("assets", {}).get("folders", [])
+            folder_ids = {f["id"] for f in folders}
+            if folder_id not in folder_ids:
+                return json.dumps({
+                    "error": f"Folder ID {folder_id} not found at root level",
+                    "available_folders": folders
+                })
+
+        upload_url = f"{wikijs.base_url}/u"
+        filename = os.path.basename(file_path)
+
+        # Wiki.js upload route uses multer().array('mediaUpload'):
+        # - file part named 'mediaUpload' is the actual file
+        # - text part named 'mediaUpload' is JSON metadata {"folderId": N}
+        # Both parts share the same field name; multer distinguishes by Content-Disposition filename.
+        # Use a dedicated client: wikijs.client has Content-Type: application/json set by default,
+        # which conflicts with the multipart/form-data Content-Type httpx generates for file uploads.
+        auth_header = wikijs.client.headers.get("Authorization", "")
+        with open(file_path, "rb") as f:
+            async with httpx.AsyncClient(timeout=30.0) as upload_client:
+                response = await upload_client.post(
+                    upload_url,
+                    headers={"Authorization": auth_header},
+                    files=[
+                        ("mediaUpload", (None, json.dumps({"folderId": folder_id}), "text/plain")),
+                        ("mediaUpload", (filename, f)),
+                    ]
+                )
+
+        response.raise_for_status()
+        result = response.text.strip()
+
+        if result != "ok":
+            return json.dumps({"error": f"Unexpected response from upload endpoint: {result}"})
+
+        # Wiki.js returns "ok" with no asset metadata; query the list to get it.
+        # Wiki.js sanitizes filenames: lowercase and replace [\s,;#]+ with _
+        sanitized_filename = re.sub(r"[\s,;#]+", "_", filename.lower())
+
+        list_query = """
+        query($folderId: Int!, $kind: AssetKind!) {
+            assets {
+                list(folderId: $folderId, kind: $kind) {
+                    id
+                    filename
+                    ext
+                    kind
+                    mime
+                    fileSize
+                }
+            }
+        }
+        """
+        list_response = await wikijs.graphql_request(list_query, {"folderId": folder_id, "kind": "ALL"})
+        assets = list_response.get("data", {}).get("assets", {}).get("list", [])
+        asset = next((a for a in assets if a.get("filename") == sanitized_filename), None)
+
+        logger.info(f"Uploaded asset: {filename} to folder {folder_id}")
+
+        if asset:
+            return json.dumps({
+                "id": asset.get("id"),
+                "filename": asset.get("filename") or sanitized_filename,
+                "mime": asset.get("mime"),
+                "fileSize": asset.get("fileSize") or file_size,
+                "kind": asset.get("kind"),
+            })
+        else:
+            # Upload succeeded but asset not found in listing (may appear after indexing)
+            return json.dumps({
+                "uploaded": True,
+                "filename": sanitized_filename,
+                "folder_id": folder_id,
+                "file_size": file_size,
+                "note": "Upload succeeded but asset not found in listing yet"
+            })
+
+    except Exception as e:
+        error_msg = f"Failed to upload asset: {str(e)}"
+        logger.error(error_msg)
+        return json.dumps({"error": error_msg})
+
 def main():
     """Main entry point for the MCP server."""
     import asyncio
-    
+
     async def run_server():
         await wikijs.authenticate()
         logger.info("Wiki.js MCP Server started")
-        
+
     # Run the server
     mcp.run()
 
