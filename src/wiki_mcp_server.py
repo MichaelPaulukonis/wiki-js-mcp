@@ -2047,6 +2047,42 @@ async def wikijs_cleanup_orphaned_mappings() -> str:
         logger.error(error_msg)
         return json.dumps({"error": error_msg})
 
+@mcp.tool()
+async def wikijs_list_asset_folders(parent_folder_id: int = 0) -> str:
+    """
+    List asset folders in Wiki.js.
+
+    Args:
+        parent_folder_id: Parent folder ID (0 = root)
+
+    Returns:
+        JSON string with folders list: {"folders": [{"id", "name", "slug"}]}
+    """
+    try:
+        await wikijs.authenticate()
+
+        query = """
+        query($parentFolderId: Int!) {
+            assets {
+                folders(parentFolderId: $parentFolderId) {
+                    id
+                    name
+                    slug
+                }
+            }
+        }
+        """
+
+        response = await wikijs.graphql_request(query, {"parentFolderId": parent_folder_id})
+        folders = response.get("data", {}).get("assets", {}).get("folders", [])
+
+        return json.dumps({"folders": folders})
+
+    except Exception as e:
+        error_msg = f"Failed to list asset folders: {str(e)}"
+        logger.error(error_msg)
+        return json.dumps({"error": error_msg})
+
 def main():
     """Main entry point for the MCP server."""
     import asyncio
