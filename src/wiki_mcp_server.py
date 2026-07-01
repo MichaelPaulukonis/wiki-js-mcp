@@ -2083,6 +2083,54 @@ async def wikijs_list_asset_folders(parent_folder_id: int = 0) -> str:
         logger.error(error_msg)
         return json.dumps({"error": error_msg})
 
+@mcp.tool()
+async def wikijs_list_assets(folder_id: int = 0, kind: str = "ALL") -> str:
+    """
+    List assets in a Wiki.js folder.
+
+    Args:
+        folder_id: Folder ID (0 = root)
+        kind: Asset kind filter - ALL, IMAGE, BINARY, DOCUMENT (default ALL)
+
+    Returns:
+        JSON string: {"assets": [{"id", "filename", "ext", "kind", "mime", "fileSize", "createdAt", "updatedAt"}], "total": int}
+    """
+    try:
+        await wikijs.authenticate()
+
+        valid_kinds = {"ALL", "IMAGE", "BINARY", "DOCUMENT"}
+        if kind.upper() not in valid_kinds:
+            kind = "ALL"
+        else:
+            kind = kind.upper()
+
+        query = """
+        query($folderId: Int!, $kind: AssetKind!) {
+            assets {
+                list(folderId: $folderId, kind: $kind) {
+                    id
+                    filename
+                    ext
+                    kind
+                    mime
+                    fileSize
+                    createdAt
+                    updatedAt
+                }
+            }
+        }
+        """
+
+        response = await wikijs.graphql_request(query, {"folderId": folder_id, "kind": kind})
+        assets = response.get("data", {}).get("assets", {}).get("list", [])
+
+        return json.dumps({"assets": assets, "total": len(assets)})
+
+    except Exception as e:
+        error_msg = f"Failed to list assets: {str(e)}"
+        logger.error(error_msg)
+        return json.dumps({"error": error_msg})
+
 def main():
     """Main entry point for the MCP server."""
     import asyncio
