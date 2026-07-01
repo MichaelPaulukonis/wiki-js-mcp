@@ -2131,6 +2131,62 @@ async def wikijs_list_assets(folder_id: int = 0, kind: str = "ALL") -> str:
         logger.error(error_msg)
         return json.dumps({"error": error_msg})
 
+@mcp.tool()
+async def wikijs_create_asset_folder(name: str, slug: str, parent_folder_id: int = 0) -> str:
+    """
+    Create an asset folder in Wiki.js.
+
+    Args:
+        name: Human-readable folder name
+        slug: URL-safe folder slug (caller's responsibility to make URL-safe)
+        parent_folder_id: Parent folder ID (0 = root)
+
+    Returns:
+        JSON string: {"created": true, "name": str, "slug": str, "parent_folder_id": int}
+    """
+    try:
+        await wikijs.authenticate()
+
+        mutation = """
+        mutation($parentFolderId: Int!, $slug: String!, $name: String!) {
+            assets {
+                createFolder(parentFolderId: $parentFolderId, slug: $slug, name: $name) {
+                    responseResult {
+                        succeeded
+                        errorCode
+                        message
+                    }
+                }
+            }
+        }
+        """
+
+        response = await wikijs.graphql_request(mutation, {
+            "parentFolderId": parent_folder_id,
+            "slug": slug,
+            "name": name
+        })
+
+        result_data = response.get("data", {}).get("assets", {}).get("createFolder", {})
+        response_result = result_data.get("responseResult", {})
+
+        if response_result.get("succeeded"):
+            logger.info(f"Created asset folder: {name} (slug: {slug}, parent: {parent_folder_id})")
+            return json.dumps({
+                "created": True,
+                "name": name,
+                "slug": slug,
+                "parent_folder_id": parent_folder_id
+            })
+        else:
+            error_msg = response_result.get("message", "Unknown error")
+            return json.dumps({"error": f"Failed to create folder: {error_msg}"})
+
+    except Exception as e:
+        error_msg = f"Failed to create asset folder: {str(e)}"
+        logger.error(error_msg)
+        return json.dumps({"error": error_msg})
+
 def main():
     """Main entry point for the MCP server."""
     import asyncio
