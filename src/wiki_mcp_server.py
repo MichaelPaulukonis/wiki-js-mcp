@@ -2090,7 +2090,7 @@ async def wikijs_list_assets(folder_id: int = 0, kind: str = "ALL") -> str:
 
     Args:
         folder_id: Folder ID (0 = root)
-        kind: Asset kind filter - ALL, IMAGE, BINARY, DOCUMENT (default ALL)
+        kind: Asset kind filter - ALL, IMAGE, BINARY, DOCUMENT (default ALL). Invalid values coerce to ALL.
 
     Returns:
         JSON string: {"assets": [{"id", "filename", "ext", "kind", "mime", "fileSize", "createdAt", "updatedAt"}], "total": int}
