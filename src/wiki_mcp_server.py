@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     LOG_FILE: str = Field(default="wikijs_mcp.log")
     REPOSITORY_ROOT: str = Field(default="./")
     DEFAULT_SPACE_NAME: str = Field(default="Documentation")
-    
+    WIKIJS_MAX_UPLOAD_BYTES: int = Field(default=52_428_800)  # 50MB
+
     class Config:
         env_file = ".env"
         extra = "ignore"  # Allow extra fields without validation errors
