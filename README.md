@@ -121,7 +121,7 @@ These rules ensure that your AI assistant will:
 - **Search integration**: Full-text search across hierarchical content
 - **Health monitoring**: Connection status and error handling
 
-## 📊 MCP Tools (21 Total)
+## 📊 MCP Tools (25 Total)
 
 ### 🏗️ **Hierarchical Documentation Tools**
 1. **`wikijs_create_repo_structure`** - Create complete repository documentation structure
@@ -157,6 +157,12 @@ These rules ensure that your AI assistant will:
 ### 🔧 **System Tools**
 20. **`wikijs_connection_status`** - Check API connection health
 21. **`wikijs_repository_context`** - Show repository mappings and context
+
+### 🖼️ **Asset Management**
+22. **`wikijs_list_asset_folders`** - List asset folders by parent ID (0 = root)
+23. **`wikijs_list_assets`** - List assets in a folder, filterable by kind (ALL/IMAGE/BINARY/DOCUMENT)
+24. **`wikijs_create_asset_folder`** - Create an asset folder under a parent
+25. **`wikijs_upload_asset`** - Upload a local file to Wiki.js; validates path, size limit, and folder ID
 
 ## 🏢 Enterprise Use Cases
 
@@ -278,6 +284,9 @@ LOG_FILE=wikijs_mcp.log
 # Repository Settings
 REPOSITORY_ROOT=./
 DEFAULT_SPACE_NAME=Documentation
+
+# Asset Upload
+WIKIJS_MAX_UPLOAD_BYTES=52428800  # 50MB default
 ```
 
 ### Authentication Options
