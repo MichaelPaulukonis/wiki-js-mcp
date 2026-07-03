@@ -2445,33 +2445,6 @@ async def wikijs_upload_asset(file_path: str, folder_id: int = 0) -> str:
 
         await wikijs.authenticate()
 
-        if folder_id != 0:
-            folders_response = await wikijs.graphql_request(
-                """
-                query {
-                    assets {
-                        folders(parentFolderId: 0) {
-                            id
-                            name
-                            slug
-                        }
-                    }
-                }
-                """,
-                {},
-            )
-            folders = (
-                folders_response.get("data", {}).get("assets", {}).get("folders", [])
-            )
-            folder_ids = {f["id"] for f in folders}
-            if folder_id not in folder_ids:
-                return json.dumps(
-                    {
-                        "error": f"Folder ID {folder_id} not found at root level",
-                        "available_folders": folders,
-                    }
-                )
-
         upload_url = f"{wikijs.base_url}/u"
         filename = os.path.basename(file_path)
 
