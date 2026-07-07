@@ -2,7 +2,7 @@
 # Python 3.12+ required
 
 # Core MCP Framework
-fastmcp>=0.1.0
+fastmcp>=3.4.2,<4.0.0
 
 # HTTP Client
 httpx>=0.27.0

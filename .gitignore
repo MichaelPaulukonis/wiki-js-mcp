@@ -95,3 +95,7 @@ wikijs_data/
 
 # Resources
 resources/ 
+
+# Test artifacts
+tests/_test_wikijs_mappings.db
+tests/_test.log
