@@ -15,7 +15,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, BinaryIO, Dict, List, Optional, Union
 
 import httpx
 import markdown
@@ -201,7 +201,9 @@ class WikiJSClient:
         wait=wait_exponential(multiplier=1, min=4, max=10),
         reraise=True,
     )
-    async def upload_asset(self, folder_id: int, filename: str, fileobj) -> str:
+    async def upload_asset(
+        self, folder_id: int, filename: str, fileobj: Union[BinaryIO, bytes]
+    ) -> str:
         """Upload a file via Wiki.js's multipart /u endpoint. Returns the raw response text.
 
         Wiki.js's upload route uses multer().array('mediaUpload'): a text part named
