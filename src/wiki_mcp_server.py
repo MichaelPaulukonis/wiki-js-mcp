@@ -12,7 +12,6 @@ import datetime
 import hashlib
 import json
 import logging
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,7 +197,9 @@ class WikiJSClient:
             raise Exception(f"Wiki.js connection error: {str(e)}")
 
     @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        reraise=True,
     )
     async def upload_asset(self, folder_id: int, filename: str, fileobj) -> str:
         """Upload a file via Wiki.js's multipart /u endpoint. Returns the raw response text.
@@ -2442,35 +2443,26 @@ async def wikijs_create_asset_folder(
         return json.dumps({"error": error_msg})
 
 
-async def _get_all_asset_folders() -> List[Dict[str, Any]]:
-    """Recursively collect every asset folder in Wiki.js.
+async def _get_all_asset_folder_ids() -> Dict[int, Dict[str, Any]]:
+    """Recursively enumerate every asset folder in the tree.
 
-    assets.folders(parentFolderId) only returns direct children, so nested
-    folders require walking the tree rather than a single root-level query.
+    Wiki.js's assets.folders query only returns direct children of a given
+    parentFolderId, not the whole tree - so validating a folder_id against just
+    folders(parentFolderId=0) (the root level) falsely rejects valid nested
+    folders. This walks the full tree via BFS instead.
     """
-    query = """
-    query($parentFolderId: Int!) {
-        assets {
-            folders(parentFolderId: $parentFolderId) {
-                id
-                name
-                slug
-            }
-        }
-    }
-    """
-    all_folders: List[Dict[str, Any]] = []
+    all_folders: Dict[int, Dict[str, Any]] = {}
     to_visit = [0]
-    visited = set()
+    visited_parents = set()
     while to_visit:
         parent_id = to_visit.pop()
-        if parent_id in visited:
+        if parent_id in visited_parents:
             continue
-        visited.add(parent_id)
-        response = await wikijs.graphql_request(query, {"parentFolderId": parent_id})
-        children = response.get("data", {}).get("assets", {}).get("folders", [])
-        for folder in children:
-            all_folders.append(folder)
+        visited_parents.add(parent_id)
+        response = await wikijs_list_asset_folders(parent_folder_id=parent_id)
+        folders = json.loads(response).get("folders", [])
+        for folder in folders:
+            all_folders[folder["id"]] = folder
             to_visit.append(folder["id"])
     return all_folders
 
@@ -2485,7 +2477,11 @@ async def wikijs_upload_asset(file_path: str, folder_id: int = 0) -> str:
         folder_id: Target folder ID (0 = root). Use wikijs_list_asset_folders to find folder IDs.
 
     Returns:
-        JSON string: {"id": int, "filename": str, "mime": str, "fileSize": int, "kind": str}
+        JSON string: {"id": int|None, "filename": str, "mime": str|None, "fileSize": int|None,
+                       "kind": str|None, "verified": bool}. "verified" is False if the upload
+                       succeeded but the newly created asset couldn't be uniquely identified
+                       in a post-upload listing (folder not yet indexed, or a concurrent upload
+                       landed in the same folder at the same time).
         On folder-not-found: {"error": str, "available_folders": [...]}
     """
     try:
@@ -2509,95 +2505,59 @@ async def wikijs_upload_asset(file_path: str, folder_id: int = 0) -> str:
         await wikijs.authenticate()
 
         if folder_id != 0:
-            all_folders = await _get_all_asset_folders()
-            folder_ids = {f["id"] for f in all_folders}
-            if folder_id not in folder_ids:
+            all_folders = await _get_all_asset_folder_ids()
+            if folder_id not in all_folders:
                 return json.dumps(
                     {
                         "error": f"Folder ID {folder_id} not found",
-                        "available_folders": all_folders,
+                        "available_folders": list(all_folders.values()),
                     }
                 )
 
-        upload_url = f"{wikijs.base_url}/u"
         filename = os.path.basename(file_path)
 
-        # Wiki.js upload route uses multer().array('mediaUpload'):
-        # - file part named 'mediaUpload' is the actual file
-        # - text part named 'mediaUpload' is JSON metadata {"folderId": N}
-        # Both parts share the same field name; multer distinguishes by Content-Disposition filename.
-        # Use a dedicated client: wikijs.client has Content-Type: application/json set by default,
-        # which conflicts with the multipart/form-data Content-Type httpx generates for file uploads.
-        auth_header = wikijs.client.headers.get("Authorization", "")
-        with open(file_path, "rb") as f:
-            async with httpx.AsyncClient(timeout=30.0) as upload_client:
-                response = await upload_client.post(
-                    upload_url,
-                    headers={"Authorization": auth_header},
-                    files=[
-                        (
-                            "mediaUpload",
-                            (None, json.dumps({"folderId": folder_id}), "text/plain"),
-                        ),
-                        ("mediaUpload", (filename, f)),
-                    ],
-                )
+        before_response = await wikijs_list_assets(folder_id=folder_id, kind="ALL")
+        before_ids = {a["id"] for a in json.loads(before_response)["assets"]}
 
-        response.raise_for_status()
-        result = response.text.strip()
+        with open(file_path, "rb") as f:
+            result = await wikijs.upload_asset(folder_id, filename, f)
 
         if result != "ok":
             return json.dumps(
                 {"error": f"Unexpected response from upload endpoint: {result}"}
             )
 
-        # Wiki.js returns "ok" with no asset metadata; query the list to get it.
-        # Wiki.js sanitizes filenames: lowercase and replace [\s,;#]+ with _
-        sanitized_filename = re.sub(r"[\s,;#]+", "_", filename.lower())
-
-        list_query = """
-        query($folderId: Int!, $kind: AssetKind!) {
-            assets {
-                list(folderId: $folderId, kind: $kind) {
-                    id
-                    filename
-                    ext
-                    kind
-                    mime
-                    fileSize
-                }
-            }
-        }
-        """
-        list_response = await wikijs.graphql_request(
-            list_query, {"folderId": folder_id, "kind": "ALL"}
-        )
-        assets = list_response.get("data", {}).get("assets", {}).get("list", [])
-        asset = next(
-            (a for a in assets if a.get("filename") == sanitized_filename), None
-        )
+        after_response = await wikijs_list_assets(folder_id=folder_id, kind="ALL")
+        after_assets = json.loads(after_response)["assets"]
+        new_assets = [a for a in after_assets if a["id"] not in before_ids]
 
         logger.info(f"Uploaded asset: {filename} to folder {folder_id}")
 
-        if asset:
+        if len(new_assets) == 1:
+            asset = new_assets[0]
             return json.dumps(
                 {
                     "id": asset.get("id"),
-                    "filename": asset.get("filename") or sanitized_filename,
+                    "filename": asset.get("filename"),
                     "mime": asset.get("mime"),
-                    "fileSize": asset.get("fileSize") or file_size,
+                    "fileSize": asset.get("fileSize"),
                     "kind": asset.get("kind"),
+                    "verified": True,
                 }
             )
         else:
-            # Upload succeeded but asset not found in listing (may appear after indexing)
+            # 0 new assets: folder listing not indexed yet. >1: a concurrent upload
+            # landed in this folder between the before/after snapshots and can't be
+            # told apart from ours - report unverified either way rather than guess.
             return json.dumps(
                 {
-                    "uploaded": True,
-                    "filename": sanitized_filename,
-                    "folder_id": folder_id,
-                    "file_size": file_size,
-                    "note": "Upload succeeded but asset not found in listing yet",
+                    "id": None,
+                    "filename": filename,
+                    "mime": None,
+                    "fileSize": file_size,
+                    "kind": None,
+                    "verified": False,
+                    "note": "Upload succeeded but the new asset could not be uniquely verified in the folder listing",
                 }
             )
 
