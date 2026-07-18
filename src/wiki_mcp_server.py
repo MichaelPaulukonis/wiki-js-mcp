@@ -2348,10 +2348,8 @@ async def wikijs_list_assets(folder_id: int = 0, kind: str = "ALL") -> str:
         await wikijs.authenticate()
 
         valid_kinds = {"ALL", "IMAGE", "BINARY", "DOCUMENT"}
-        if kind.upper() not in valid_kinds:
-            kind = "ALL"
-        else:
-            kind = kind.upper()
+        kind_upper = kind.upper()
+        kind = kind_upper if kind_upper in valid_kinds else "ALL"
 
         query = """
         query($folderId: Int!, $kind: AssetKind!) {
