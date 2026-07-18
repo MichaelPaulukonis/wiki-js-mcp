@@ -109,14 +109,15 @@ class WikiJSClient:
         self.authenticated = False
 
     async def authenticate(self) -> bool:
-        """Set up authentication headers for GraphQL requests."""
+        """Set up authentication headers for requests.
+
+        Deliberately does NOT set a client-level Content-Type: httpx already sets
+        the correct Content-Type per request from the json= or files= parameter
+        (application/json for graphql_request, multipart/form-data;boundary=... for
+        upload_asset). A client-level Content-Type default would override both.
+        """
         if settings.token:
-            self.client.headers.update(
-                {
-                    "Authorization": f"Bearer {settings.token}",
-                    "Content-Type": "application/json",
-                }
-            )
+            self.client.headers.update({"Authorization": f"Bearer {settings.token}"})
             self.authenticated = True
             return True
         elif settings.WIKIJS_USERNAME and settings.WIKIJS_PASSWORD:
@@ -149,12 +150,7 @@ class WikiJSClient:
                     .get("succeeded")
                 ):
                     jwt_token = response["data"]["authentication"]["login"]["jwt"]
-                    self.client.headers.update(
-                        {
-                            "Authorization": f"Bearer {jwt_token}",
-                            "Content-Type": "application/json",
-                        }
-                    )
+                    self.client.headers.update({"Authorization": f"Bearer {jwt_token}"})
                     self.authenticated = True
                     return True
                 else:
@@ -200,6 +196,42 @@ class WikiJSClient:
         except httpx.RequestError as e:
             logger.error(f"Wiki.js connection error: {str(e)}")
             raise Exception(f"Wiki.js connection error: {str(e)}")
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
+    )
+    async def upload_asset(self, folder_id: int, filename: str, fileobj) -> str:
+        """Upload a file via Wiki.js's multipart /u endpoint. Returns the raw response text.
+
+        Wiki.js's upload route uses multer().array('mediaUpload'): a text part named
+        'mediaUpload' carries JSON metadata {"folderId": N}, and a second part with the
+        same field name carries the actual file; multer tells them apart by whether the
+        part has a filename (Content-Disposition).
+        """
+        url = f"{self.base_url}/u"
+        try:
+            response = await self.client.post(
+                url,
+                files=[
+                    (
+                        "mediaUpload",
+                        (None, json.dumps({"folderId": folder_id}), "text/plain"),
+                    ),
+                    ("mediaUpload", (filename, fileobj)),
+                ],
+            )
+            response.raise_for_status()
+            return response.text.strip()
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Wiki.js upload HTTP error {e.response.status_code}: {e.response.text}"
+            )
+            raise Exception(
+                f"Wiki.js upload HTTP error {e.response.status_code}: {e.response.text}"
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Wiki.js upload connection error: {str(e)}")
+            raise Exception(f"Wiki.js upload connection error: {str(e)}")
 
 
 # Initialize client
