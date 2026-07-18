@@ -2412,6 +2412,39 @@ async def wikijs_create_asset_folder(
         return json.dumps({"error": error_msg})
 
 
+async def _get_all_asset_folders() -> List[Dict[str, Any]]:
+    """Recursively collect every asset folder in Wiki.js.
+
+    assets.folders(parentFolderId) only returns direct children, so nested
+    folders require walking the tree rather than a single root-level query.
+    """
+    query = """
+    query($parentFolderId: Int!) {
+        assets {
+            folders(parentFolderId: $parentFolderId) {
+                id
+                name
+                slug
+            }
+        }
+    }
+    """
+    all_folders: List[Dict[str, Any]] = []
+    to_visit = [0]
+    visited = set()
+    while to_visit:
+        parent_id = to_visit.pop()
+        if parent_id in visited:
+            continue
+        visited.add(parent_id)
+        response = await wikijs.graphql_request(query, {"parentFolderId": parent_id})
+        children = response.get("data", {}).get("assets", {}).get("folders", [])
+        for folder in children:
+            all_folders.append(folder)
+            to_visit.append(folder["id"])
+    return all_folders
+
+
 @mcp.tool()
 async def wikijs_upload_asset(file_path: str, folder_id: int = 0) -> str:
     """
@@ -2444,6 +2477,17 @@ async def wikijs_upload_asset(file_path: str, folder_id: int = 0) -> str:
             )
 
         await wikijs.authenticate()
+
+        if folder_id != 0:
+            all_folders = await _get_all_asset_folders()
+            folder_ids = {f["id"] for f in all_folders}
+            if folder_id not in folder_ids:
+                return json.dumps(
+                    {
+                        "error": f"Folder ID {folder_id} not found",
+                        "available_folders": all_folders,
+                    }
+                )
 
         upload_url = f"{wikijs.base_url}/u"
         filename = os.path.basename(file_path)
